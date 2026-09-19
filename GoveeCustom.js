@@ -94,7 +94,7 @@ function gradientOffFor(sku) {
  * ========================================================================== */
 
 export function Name()            { return "Govee Custom"; }
-export function Version()         { return "1.0.0"; }
+export function Version()         { return "1.0.1"; }
 export function Type()            { return "network"; }
 export function Publisher()       { return "Custom"; }
 export function Size()            { return [1, 1]; }
@@ -129,7 +129,10 @@ let dev = {
     lastFrame: 0,
     lastArm: 0,
     lastSolid: "",
-    razerArmed: false
+    razerArmed: false,
+    firstRenderLogged: false,
+    lastDebug: 0,
+    sentCount: 0
 };
 
 const MIN_FRAME_MS = 25; // ~40 fps cap (Govee streaming ceiling)
@@ -155,8 +158,9 @@ export function Initialize() {
     dev.sock = udp.createSocket();
     dev.sock.on("error", (err, msg) => device.log("socket error: " + msg));
     const lastOctet = parseInt(("" + dev.ip).split(".").pop(), 10) || 0;
-    try { dev.sock.bind(46920 + (lastOctet % 500)); }
-    catch (e) { try { dev.sock.bind(0); } catch (e2) { device.log("bind failed: " + e2.message); } }
+    const bindPort = 46920 + (lastOctet % 500);
+    try { dev.sock.bind(bindPort); device.log(`[GoveeCustom] send socket bound to ${bindPort}`); }
+    catch (e) { try { dev.sock.bind(0); device.log("[GoveeCustom] send socket bound to ephemeral port"); } catch (e2) { device.log("[GoveeCustom] bind failed: " + e2.message); } }
 
     device.log(`Govee Custom init: ${dev.sku} @ ${dev.ip}, ${dev.ledCount} zones, proto ${dev.protocol}`);
 
@@ -178,6 +182,11 @@ export function Render() {
     if (now - dev.lastFrame < MIN_FRAME_MS) return;
     dev.lastFrame = now;
 
+    if (!dev.firstRenderLogged) {
+        dev.firstRenderLogged = true;
+        device.log(`[GoveeCustom] first Render for ${dev.sku} @ ${dev.ip} (${dev.ledCount} zones, mode=${lightingMode})`);
+    }
+
     // Heartbeat re-arm: keeps the device in streaming mode and recovers
     // automatically after an app update / power blip. No status reply needed.
     const reArmMs = (parseInt(reArmSeconds) || 4) * 1000;
@@ -189,17 +198,27 @@ export function Render() {
         const p = dev.ledPositions[i];
         let c;
         if (lightingMode === "Forced") {
-            c = hexToRgb(forcedColor);
+            c = toRgb(forcedColor);
         } else {
             c = device.color(p[0], p[1]); // [r,g,b]
         }
         colors.push(c);
     }
 
+    let ok;
     if (dev.protocol === PROTO_SOLID) {
-        sendSolid(colors[0]);
+        ok = sendSolid(colors[0]);
     } else {
-        sendStream(colors);
+        ok = sendStream(colors);
+    }
+    dev.sentCount++;
+
+    // Throttled diagnostics (~every 3s): confirms Render is running, what
+    // color it sampled for zone 0, and whether the UDP send succeeded.
+    if (now - dev.lastDebug > 3000) {
+        dev.lastDebug = now;
+        const z = colors[0] || [0, 0, 0];
+        device.log(`[GoveeCustom] ${dev.sku} mode=${lightingMode} zone0=[${z[0]},${z[1]},${z[2]}] armed=${dev.razerArmed} frames=${dev.sentCount} lastSend=${ok}`);
     }
 }
 
@@ -239,14 +258,14 @@ function sendStream(colors) {
     }
     packet.push(xor(packet));
 
-    sendCmd({ msg: { cmd: "razer", data: { pt: encode(packet) } } });
+    return sendCmd({ msg: { cmd: "razer", data: { pt: encode(packet) } } });
 }
 
 function sendSolid(c) {
     const key = c[0] + "," + c[1] + "," + c[2];
-    if (key === dev.lastSolid) return; // only send on change
+    if (key === dev.lastSolid) return true; // only send on change
     dev.lastSolid = key;
-    sendCmd({ msg: { cmd: "colorwc", data: {
+    return sendCmd({ msg: { cmd: "colorwc", data: {
         color: { r: c[0], g: c[1], b: c[2] }, colorTemInKelvin: 0
     } } });
 }
@@ -258,11 +277,13 @@ function xor(bytes) {
 }
 
 function sendCmd(obj) {
-    if (!dev.sock || !dev.ip) return;
+    if (!dev.sock || !dev.ip) return false;
     try {
         dev.sock.write(obj, dev.ip, PORT_CMD);
+        return true;
     } catch (e) {
-        device.log("send failed: " + e.message);
+        device.log("[GoveeCustom] send failed: " + e.message);
+        return false;
     }
 }
 
@@ -273,6 +294,18 @@ function hexToRgb(hex) {
         parseInt(hex.substring(2, 4), 16) || 0,
         parseInt(hex.substring(4, 6), 16) || 0
     ];
+}
+
+/* Accept a color as an [r,g,b] array, a "#RRGGBB" string, or "rgb(r,g,b)". */
+function toRgb(v) {
+    if (Array.isArray(v)) return [v[0] | 0, v[1] | 0, v[2] | 0];
+    if (typeof v === "string") {
+        const s = v.trim();
+        if (s.charAt(0) === "#") return hexToRgb(s);
+        const m = s.match(/(\d+)\D+(\d+)\D+(\d+)/);
+        if (m) return [parseInt(m[1]), parseInt(m[2]), parseInt(m[3])];
+    }
+    return [0, 0, 0];
 }
 
 export function Shutdown(SystemSuspending) {
