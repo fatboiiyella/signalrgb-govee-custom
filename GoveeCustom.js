@@ -30,7 +30,7 @@ const SKU_PROFILES = {
     "H6061": { protocol: PROTO_DREAMVIEW, leds: 10, label: "Hexa Panels" },
     "H6143": { protocol: PROTO_DREAMVIEW, leds: 15, label: "RGBIC Strip" },
     "H6076": { protocol: PROTO_DREAMVIEW, leds: 10, label: "Floor Lamp Basic" },
-    "H61C3": { protocol: PROTO_SOLID, leds: 15, label: "Neon Rope (Gaming)" }
+   "H61C3": { protocol: PROTO_DREAMVIEW, leds: 15, label: "Neon Rope (Gaming)" }
 };
 
 const DEFAULT_PROFILE = {
