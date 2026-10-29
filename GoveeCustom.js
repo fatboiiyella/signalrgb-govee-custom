@@ -2,14 +2,16 @@
 import udp from "@SignalRGB/udp";
 import { encode } from "@SignalRGB/base64";
 
-// Govee Custom v1.0.2
-// Disable the stock Govee addon to avoid UDP port conflicts.
+// Govee Custom v1.0.3
+// SignalRGB LAN plugin
+// H61C3 DreamView streaming configuration
 
 const MANUAL_IPS = ["192.168.1.213"];
 
 const PORT_CMD = 4003;
 const PORT_SCAN = 4001;
 const PORT_LISTEN = 4002;
+
 const MCAST_ADDR = "239.255.255.250";
 const BCAST_ADDR = "255.255.255.255";
 
@@ -17,34 +19,74 @@ const PROTO_DREAMVIEW = 1;
 const PROTO_RAZER = 2;
 const PROTO_SOLID = 3;
 
+const H61C3_ZONES = 15;
+
+// Increase this if streaming causes excessive
+// command interruptions.
+const REARM_INTERVAL_MS = 30000;
+
+// 33 milliseconds = approximately 30 FPS.
+const MIN_FRAME_MS = 33;
+
 const GRADIENT_OFF_SKUS = [
-    "H610A", "H6056", "H6047", "H610B", "H6046",
-    "H6608", "H6609", "H606A", "H6065", "H6066",
-    "H6067", "H6061", "H6043", "H6042", "H70BC",
+    "H610A", "H6056", "H6047",
+    "H610B", "H6046", "H6608",
+    "H6609", "H606A", "H6065",
+    "H6066", "H6067", "H6061",
+    "H6043", "H6042", "H70BC",
     "H6063", "H6069", "H8069"
 ];
 
 const SKU_PROFILES = {
-    "H610A": { protocol: PROTO_DREAMVIEW, leds: 6, label: "Glide Lively Bars" },
-    "H6062": { protocol: PROTO_DREAMVIEW, leds: 7, label: "Glide Wall Light" },
-    "H6061": { protocol: PROTO_DREAMVIEW, leds: 10, label: "Hexa Panels" },
-    "H6143": { protocol: PROTO_DREAMVIEW, leds: 15, label: "RGBIC Strip" },
-    "H6076": { protocol: PROTO_DREAMVIEW, leds: 10, label: "Floor Lamp Basic" },
-   "H61C3": { protocol: PROTO_DREAMVIEW, leds: 15, label: "Neon Rope (Gaming)" }
+    "H610A": {
+        protocol: PROTO_DREAMVIEW,
+        leds: 6,
+        label: "Glide Lively Bars"
+    },
+    "H6062": {
+        protocol: PROTO_DREAMVIEW,
+        leds: 7,
+        label: "Glide Wall Light"
+    },
+    "H6061": {
+        protocol: PROTO_DREAMVIEW,
+        leds: 10,
+        label: "Hexa Panels"
+    },
+    "H6143": {
+        protocol: PROTO_DREAMVIEW,
+        leds: 15,
+        label: "RGBIC Strip"
+    },
+    "H6076": {
+        protocol: PROTO_DREAMVIEW,
+        leds: 10,
+        label: "Floor Lamp Basic"
+    },
+    "H61C3": {
+        protocol: PROTO_DREAMVIEW,
+        leds: H61C3_ZONES,
+        label: "Neon Rope Gaming"
+    }
 };
 
 const DEFAULT_PROFILE = {
     protocol: PROTO_DREAMVIEW,
     leds: 10,
-    label: "Govee device"
+    label: "Govee Device"
 };
 
 function profileForSku(sku) {
     if (!sku) return DEFAULT_PROFILE;
-    if (SKU_PROFILES[sku]) return SKU_PROFILES[sku];
+
+    if (SKU_PROFILES[sku]) {
+        return SKU_PROFILES[sku];
+    }
 
     for (const key of Object.keys(SKU_PROFILES)) {
-        if (sku.indexOf(key) === 0) return SKU_PROFILES[key];
+        if (sku.indexOf(key) === 0) {
+            return SKU_PROFILES[key];
+        }
     }
 
     return DEFAULT_PROFILE;
@@ -54,37 +96,73 @@ function gradientOffFor(sku) {
     if (!sku) return 1;
 
     for (const s of GRADIENT_OFF_SKUS) {
-        if (sku.indexOf(s) === 0) return 0;
+        if (sku.indexOf(s) === 0) {
+            return 0;
+        }
     }
 
     return 1;
 }
 
-// SignalRGB device metadata
+// -----------------------------------------
+// SignalRGB plugin information
+// -----------------------------------------
 
-export function Name() { return "Govee Custom"; }
-export function Version() { return "1.0.2"; }
-export function Type() { return "network"; }
-export function Publisher() { return "Custom"; }
-export function Size() { return [15, 1]; }
+export function Name() {
+    return "Govee Custom";
+}
+
+export function Version() {
+    return "1.0.3";
+}
+
+export function Type() {
+    return "network";
+}
+
+export function Publisher() {
+    return "Custom";
+}
+
+export function Size() {
+    return [H61C3_ZONES, 1];
+}
 
 export function LedNames() {
-    return Array.from(
-        { length: 15 },
-        (_, i) => "Zone " + (i + 1)
-    );
+    const names = [];
+
+    for (let i = 0; i < H61C3_ZONES; i++) {
+        names.push("Zone " + (i + 1));
+    }
+
+    return names;
 }
 
 export function LedPositions() {
-    return Array.from(
-        { length: 15 },
-        (_, i) => [i, 0]
-    );
+    const positions = [];
+
+    for (let i = 0; i < H61C3_ZONES; i++) {
+        positions.push([i, 0]);
+    }
+
+    return positions;
 }
 
-export function DefaultPosition() { return [0, 70]; }
-export function DefaultScale() { return 1.0; }
-export function SubdeviceController() { return false; }
+export function DefaultPosition() {
+    return [0, 70];
+}
+
+export function DefaultScale() {
+    return 1.0;
+}
+
+export function SubdeviceController() {
+    return false;
+}
+
+// -----------------------------------------
+// User controls
+// -----------------------------------------
 
 export function ControllableParameters() {
     return [
@@ -103,63 +181,83 @@ export function ControllableParameters() {
             min: "0",
             max: "360",
             type: "color",
-            default: "#009bde"
+            default: "#ff0000"
         },
         {
             property: "onShutdown",
             group: "settings",
             label: "On shutdown",
             type: "combobox",
-            values: ["Turn device off", "Release control"],
-            default: "Turn device off"
-        },
-        {
-            property: "reArmSeconds",
-            group: "settings",
-            label: "Re-arm interval (s)",
-            type: "combobox",
-            values: ["2", "4", "8"],
-            default: "4"
+            values: [
+                "Turn device off",
+                "Release control"
+            ],
+            default: "Release control"
         }
     ];
 }
+
+// -----------------------------------------
+// Device state
+// -----------------------------------------
 
 let dev = {
     ip: null,
     sku: null,
     protocol: PROTO_DREAMVIEW,
-    ledCount: 10,
+    ledCount: H61C3_ZONES,
     gradientOff: 1,
+
     sock: null,
-    ledNames: [],
     ledPositions: [],
+
     lastFrame: 0,
     lastArm: 0,
-    lastSolid: "",
-    razerArmed: false,
-    firstRenderLogged: false,
     lastDebug: 0,
+    lastSolid: "",
+
+    firstRenderLogged: false,
+    razerArmed: false,
     sentCount: 0
 };
 
-const MIN_FRAME_MS = 25;
-
+// -----------------------------------------
 // Device initialization
-// Corrected: no unsupported device.setLedNames methods.
+// -----------------------------------------
 
-export function Initialize(dev.protocol = dev.sku === "H61C3"
-    ? PROTO_SOLID
-    : (controller.protocol || PROTO_DREAMVIEW);) {
+export function Initialize() {
     dev.ip = controller.ip;
     dev.sku = controller.sku;
-   dev.protocol = dev.sku === "H61C3"
-    ? PROTO_SOLID
-    : (controller.protocol || PROTO_DREAMVIEW);
-    dev.ledCount = controller.ledCount || 10;
+
+    const profile = profileForSku(dev.sku);
+
+    // IMPORTANT:
+    // Use the current profile instead of the
+    // potentially outdated cached protocol.
+    dev.protocol = profile.protocol;
+
+    dev.ledCount = profile.leds;
+
+    // Explicitly restore DreamView on H61C3.
+    // This ignores a cached Solid Color setting.
+    if (dev.sku && dev.sku.indexOf("H61C3") === 0) {
+        dev.protocol = PROTO_DREAMVIEW;
+        dev.ledCount = H61C3_ZONES;
+    }
+
     dev.gradientOff = gradientOffFor(dev.sku);
 
+    dev.lastFrame = 0;
+    dev.lastArm = 0;
+    dev.lastDebug = 0;
+    dev.lastSolid = "";
+    dev.sentCount = 0;
+    dev.razerArmed = false;
+    dev.firstRenderLogged = false;
+
     device.setName(
-        controller.name || ("Govee " + (dev.sku || "device"))
+        controller.name ||
+        ("Govee " + (dev.sku || "Device"))
     );
 
     buildLayout(dev.ledCount);
@@ -167,97 +265,116 @@ export function Initialize(dev.protocol = dev.sku === "H61C3"
     dev.sock = udp.createSocket();
 
     dev.sock.on("error", (err, msg) => {
-        device.log("socket error: " + msg);
+        device.log(
+            "[GoveeCustom] Socket error: " + msg
+        );
     });
 
     const lastOctet =
-        parseInt(("" + dev.ip).split(".").pop(), 10) || 0;
+        parseInt(
+            String(dev.ip).split(".").pop(),
+            10
+        ) || 0;
 
     const bindPort = 46920 + (lastOctet % 500);
 
     try {
         dev.sock.bind(bindPort);
+
         device.log(
-            "[GoveeCustom] send socket bound to " + bindPort
+            "[GoveeCustom] Socket bound: " +
+            bindPort
         );
     } catch (e) {
         try {
             dev.sock.bind(0);
+
             device.log(
-                "[GoveeCustom] send socket bound to ephemeral port"
+                "[GoveeCustom] Ephemeral socket bound"
             );
         } catch (e2) {
             device.log(
-                "[GoveeCustom] bind failed: " + e2.message
+                "[GoveeCustom] Socket bind failed: " +
+                e2.message
             );
         }
     }
 
     device.log(
-        "Govee Custom init: " +
-        dev.sku + " @ " +
-        dev.ip + ", " +
-        dev.ledCount + " zones, proto " +
-        dev.protocol
+        "[GoveeCustom] Initialized " +
+        dev.sku +
+        " IP=" + dev.ip +
+        " protocol=" + dev.protocol +
+        " zones=" + dev.ledCount
     );
 
-    armDevice(Date.now(), true);
+    armDevice(Date.now());
 }
 
-function buildLayout(n) {
-    dev.ledNames = [];
+function buildLayout(count) {
     dev.ledPositions = [];
 
-    for (let i = 0; i < n; i++) {
-        dev.ledNames.push("Zone " + (i + 1));
+    for (let i = 0; i < count; i++) {
         dev.ledPositions.push([i, 0]);
     }
 }
 
+// -----------------------------------------
 // Lighting renderer
+// -----------------------------------------
 
 export function Render() {
     const now = Date.now();
 
-    if (now - dev.lastFrame < MIN_FRAME_MS) return;
+    if (now - dev.lastFrame < MIN_FRAME_MS) {
+        return;
+    }
+
     dev.lastFrame = now;
 
     if (!dev.firstRenderLogged) {
         dev.firstRenderLogged = true;
+
         device.log(
-            "[GoveeCustom] first Render for " +
-            dev.sku + " @ " + dev.ip
+            "[GoveeCustom] First render " +
+            dev.sku +
+            " protocol=" + dev.protocol
         );
     }
 
-    const reArmMs =
-        (parseInt(reArmSeconds, 10) || 4) * 1000;
-
-    if (now - dev.lastArm > reArmMs) {
-        armDevice(now, false);
+    // Re-enter streaming mode periodically,
+    // not on every frame.
+    if (
+        now - dev.lastArm > REARM_INTERVAL_MS
+    ) {
+        armDevice(now);
     }
 
     const colors = [];
 
     for (let i = 0; i < dev.ledCount; i++) {
-        const p = dev.ledPositions[i];
-        let c;
+        const position = dev.ledPositions[i];
+
+        let color;
 
         if (lightingMode === "Forced") {
-            c = toRgb(forcedColor);
+            color = toRgb(forcedColor);
         } else {
-            c = device.color(p[0], p[1]);
+            color = device.color(
+                position[0],
+                position[1]
+            );
         }
 
-        colors.push(c);
+        colors.push(color);
     }
 
-    let ok;
+    let sent = false;
 
     if (dev.protocol === PROTO_SOLID) {
-        ok = sendSolid(colors[0]);
+        sent = sendSolid(colors[0]);
     } else {
-        ok = sendStream(colors);
+        sent = sendStream(colors);
     }
 
     dev.sentCount++;
@@ -265,37 +382,42 @@ export function Render() {
     if (now - dev.lastDebug > 3000) {
         dev.lastDebug = now;
 
-        const z = colors[0] || [0, 0, 0];
+        const first = colors[0] || [0, 0, 0];
 
         device.log(
             "[GoveeCustom] " +
             dev.sku +
             " mode=" + lightingMode +
-            " zone0=[" + z.join(",") + "]" +
-            " armed=" + dev.razerArmed +
+            " protocol=" + dev.protocol +
+            " zone0=" + first.join(",") +
             " frames=" + dev.sentCount +
-            " lastSend=" + ok
+            " armed=" + dev.razerArmed +
+            " lastSend=" + sent
         );
     }
 }
 
-// Device streaming controls
+// -----------------------------------------
+// Streaming mode
+// -----------------------------------------
 
-function armDevice(now, force) {
+function armDevice(now) {
     dev.lastArm = now;
 
+    // Ensure light is powered on.
     sendCmd({
         msg: {
             cmd: "turn",
-            data: { value: 1 }
+            data: {
+                value: 1
+            }
         }
     });
 
     if (dev.protocol !== PROTO_SOLID) {
         sendCmd(razerModeCommand(true));
         dev.razerArmed = true;
-    } else if (force) {
-        sendCmd(razerModeCommand(false));
+    } else {
         dev.razerArmed = false;
     }
 }
@@ -303,18 +425,28 @@ function armDevice(now, force) {
 function razerModeCommand(enable) {
     const en = enable ? 1 : 0;
 
-    const pt = encode([
-        0xBB, 0x00, 0x01, 0xB1,
-        en, en ? 0x0A : 0x0B
-    ]);
+    const packet = [
+        0xBB,
+        0x00,
+        0x01,
+        0xB1,
+        en,
+        en ? 0x0A : 0x0B
+    ];
 
     return {
         msg: {
             cmd: "razer",
-            data: { pt: pt }
+            data: {
+                pt: encode(packet)
+            }
         }
     };
 }
+
+// -----------------------------------------
+// RGBIC DreamView frames
+// -----------------------------------------
 
 function sendStream(colors) {
     let collection = [
@@ -322,32 +454,40 @@ function sendStream(colors) {
         colors.length
     ];
 
-    for (const c of colors) {
-        collection = collection.concat([
-            c[0], c[1], c[2]
-        ]);
+    for (const color of colors) {
+        collection.push(
+            color[0],
+            color[1],
+            color[2]
+        );
     }
 
     let packet;
 
     if (dev.protocol === PROTO_RAZER) {
         packet = [
-            0xBB, 0x00, 0x0E,
-            0xB0, 0x01, colors.length
+            0xBB,
+            0x00,
+            0x0E,
+            0xB0,
+            0x01,
+            colors.length
         ];
 
-        for (const c of colors) {
-            packet = packet.concat([
-                c[0], c[1], c[2]
-            ]);
+        for (const color of colors) {
+            packet.push(
+                color[0],
+                color[1],
+                color[2]
+            );
         }
     } else {
-        const len = collection.length;
+        const length = collection.length;
 
         packet = [
             0xBB,
-            (len >> 8) & 0xFF,
-            len & 0xFF,
+            (length >> 8) & 0xFF,
+            length & 0xFF,
             0xB0
         ].concat(collection);
     }
@@ -364,87 +504,116 @@ function sendStream(colors) {
     });
 }
 
-function sendSolid(c) {
-    const key = c.join(",");
+// -----------------------------------------
+// Solid color fallback
+// -----------------------------------------
 
-    if (key === dev.lastSolid) return true;
+function sendSolid(color) {
+    if (!color) return false;
 
-    dev.lastSolid = key;
+    const key = color.join(",");
 
-    return sendCmd({
+    if (key === dev.lastSolid) {
+        return true;
+    }
+
+    const ok = sendCmd({
         msg: {
             cmd: "colorwc",
             data: {
                 color: {
-                    r: c[0],
-                    g: c[1],
-                    b: c[2]
+                    r: color[0],
+                    g: color[1],
+                    b: color[2]
                 },
                 colorTemInKelvin: 0
             }
         }
     });
-}
 
-function xor(bytes) {
-    let cs = 0;
-
-    for (const b of bytes) {
-        cs ^= b;
+    if (ok) {
+        dev.lastSolid = key;
     }
 
-    return cs;
+    return ok;
 }
 
-function sendCmd(obj) {
-    if (!dev.sock || !dev.ip) return false;
+// -----------------------------------------
+// Network sending
+// -----------------------------------------
+
+function sendCmd(command) {
+    if (!dev.sock || !dev.ip) {
+        return false;
+    }
 
     try {
-        dev.sock.write(obj, dev.ip, PORT_CMD);
+        dev.sock.write(
+            command,
+            dev.ip,
+            PORT_CMD
+        );
+
         return true;
     } catch (e) {
         device.log(
-            "[GoveeCustom] send failed: " + e.message
+            "[GoveeCustom] Send failed: " +
+            e.message
         );
+
         return false;
     }
 }
 
+function xor(bytes) {
+    let checksum = 0;
+
+    for (const byte of bytes) {
+        checksum ^= byte;
+    }
+
+    return checksum;
+}
+
+// -----------------------------------------
+// Color conversion
+// -----------------------------------------
+
 function hexToRgb(hex) {
-    hex = ("" + hex).replace("#", "");
+    const clean = String(hex).replace("#", "");
 
     return [
-        parseInt(hex.substring(0, 2), 16) || 0,
-        parseInt(hex.substring(2, 4), 16) || 0,
-        parseInt(hex.substring(4, 6), 16) || 0
+        parseInt(clean.substring(0, 2), 16) || 0,
+        parseInt(clean.substring(2, 4), 16) || 0,
+        parseInt(clean.substring(4, 6), 16) || 0
     ];
 }
 
-function toRgb(v) {
-    if (Array.isArray(v)) {
+function toRgb(value) {
+    if (Array.isArray(value)) {
         return [
-            v[0] | 0,
-            v[1] | 0,
-            v[2] | 0
+            value[0] | 0,
+            value[1] | 0,
+            value[2] | 0
         ];
     }
 
-    if (typeof v === "string") {
-        const s = v.trim();
+    if (typeof value === "string") {
+        const s = value.trim();
 
-        if (s.charAt(0) === "#") {
+        if (s.startsWith("#")) {
             return hexToRgb(s);
         }
 
-        const m = s.match(
+        const match = s.match(
             /(\d+)\D+(\d+)\D+(\d+)/
         );
 
-        if (m) {
+        if (match) {
             return [
-                parseInt(m[1], 10),
-                parseInt(m[2], 10),
-                parseInt(m[3], 10)
+                parseInt(match[1], 10),
+                parseInt(match[2], 10),
+                parseInt(match[3], 10)
             ];
         }
     }
@@ -452,7 +621,9 @@ function toRgb(v) {
     return [0, 0, 0];
 }
 
+// -----------------------------------------
 // Shutdown
+// -----------------------------------------
 
 export function Shutdown(SystemSuspending) {
     try {
@@ -465,28 +636,34 @@ export function Shutdown(SystemSuspending) {
                 sendCmd({
                     msg: {
                         cmd: "turn",
-                        data: { value: 0 }
+                        data: {
+                            value: 0
+                        }
                     }
                 });
             }
         }
     } catch (e) {
-        // Best effort shutdown.
+        // Best effort cleanup.
     }
 }
 
-// Govee network discovery
+// -----------------------------------------
+// Discovery service
+// -----------------------------------------
 
 export function DiscoveryService() {
     this.IconUrl = null;
+
     this.lastPollTime = -10000;
     this.PollInterval = 5000;
+
     this.controllers = {};
 
     this.Initialize = function () {
         service.log(
-            "Govee Custom discovery starting (v" +
-            Version() + ")"
+            "[GoveeCustom] Discovery v" +
+            Version()
         );
 
         this.startSocket();
@@ -506,19 +683,21 @@ export function DiscoveryService() {
 
         this.sock.on("error", (err, msg) => {
             service.log(
-                "discovery socket error: " + msg
+                "[GoveeCustom] Discovery socket error: " +
+                msg
             );
         });
 
         service.log(
-            "Binding UDP " + PORT_LISTEN
+            "[GoveeCustom] Binding UDP " +
+            PORT_LISTEN
         );
 
         this.sock.bind(PORT_LISTEN);
     };
 
     this.sendScan = function () {
-        const scan = {
+        const request = {
             msg: {
                 cmd: "scan",
                 data: {
@@ -532,62 +711,73 @@ export function DiscoveryService() {
             BCAST_ADDR
         ].concat(MANUAL_IPS);
 
-        for (const t of targets) {
+        for (const target of targets) {
             try {
                 this.sock.write(
-                    scan,
-                    t,
+                    request,
+                    target,
                     PORT_SCAN
                 );
             } catch (e) {
-                // Continue to remaining targets.
+                service.log(
+                    "[GoveeCustom] Scan failed for " +
+                    target
+                );
             }
         }
     };
 
     this.onMessage = function (value) {
-        if (!value || !value.data) return;
+        if (!value || !value.data) {
+            return;
+        }
 
-        let resp;
+        let response;
 
         try {
-            resp = JSON.parse(value.data);
+            response = JSON.parse(value.data);
         } catch (e) {
             return;
         }
 
         if (
-            !resp.msg ||
-            resp.msg.cmd !== "scan" ||
-            !resp.msg.data
+            !response.msg ||
+            response.msg.cmd !== "scan" ||
+            !response.msg.data
         ) {
             return;
         }
 
-        const d = resp.msg.data;
-        const ip = d.ip || this.ipOf(value.address);
+        const data = response.msg.data;
 
-        if (!ip || !d.device) return;
+        const ip =
+            data.ip ||
+            this.ipOf(value.address);
+
+        if (!ip || !data.device) {
+            return;
+        }
+
+        const profile =
+            profileForSku(data.sku);
+
+        const ctrl = {
+            id: data.device,
+            ip: ip,
+            sku: data.sku || null,
+            protocol: profile.protocol,
+            ledCount: profile.leds,
+            name:
+                "Govee " +
+                (data.sku || "Device") +
+                " (" + profile.label + ")"
+        };
 
         if (!this.controllers[ip]) {
-            const prof = profileForSku(d.sku);
-
-            const ctrl = {
-                id: d.device,
-                ip: ip,
-                sku: d.sku || null,
-                protocol: prof.protocol,
-                ledCount: prof.leds,
-                name:
-                    "Govee " +
-                    (d.sku || "device") +
-                    " (" + prof.label + ")"
-            };
-
             this.controllers[ip] = ctrl;
 
             service.log(
-                "Discovered " +
+                "[GoveeCustom] Discovered " +
                 ctrl.name + " @ " + ip
             );
 
@@ -595,11 +785,18 @@ export function DiscoveryService() {
             service.announceController(ctrl);
             this.saveCache();
         } else {
-            this.controllers[ip].ip = ip;
+            // Refresh the existing controller profile.
+            // Do not retain an old Solid protocol.
+            const existing = this.controllers[ip];
 
-            service.updateController(
-                this.controllers[ip]
-            );
+            existing.id = ctrl.id;
+            existing.ip = ctrl.ip;
+            existing.sku = ctrl.sku;
+            existing.protocol = ctrl.protocol;
+            existing.ledCount = ctrl.ledCount;
+            existing.name = ctrl.name;
+
+            service.updateController(existing);
         }
     };
 
@@ -608,7 +805,8 @@ export function DiscoveryService() {
 
         if (
             force === true ||
-            now - this.lastPollTime > this.PollInterval
+            now - this.lastPollTime >
+                this.PollInterval
         ) {
             this.lastPollTime = now;
             this.sendScan();
@@ -618,11 +816,11 @@ export function DiscoveryService() {
     this.ipOf = function (address) {
         if (!address) return null;
 
-        const m = address.match(
+        const match = address.match(
             /(\d{1,3}\.){3}\d{1,3}/
         );
 
-        return m ? m[0] : null;
+        return match ? match[0] : null;
     };
 
     this.saveCache = function () {
@@ -651,18 +849,37 @@ export function DiscoveryService() {
             for (const ip of Object.keys(cached)) {
                 const ctrl = cached[ip];
 
+                // Update old cached configurations.
+                const profile =
+                    profileForSku(ctrl.sku);
+
+                ctrl.protocol = profile.protocol;
+                ctrl.ledCount = profile.leds;
+
+                if (
+                    ctrl.sku &&
+                    ctrl.sku.indexOf("H61C3") === 0
+                ) {
+                    ctrl.protocol = PROTO_DREAMVIEW;
+                    ctrl.ledCount = H61C3_ZONES;
+                }
+
                 this.controllers[ip] = ctrl;
 
                 service.addController(ctrl);
                 service.announceController(ctrl);
 
                 service.log(
-                    "Restored cached " +
-                    (ctrl.name || ip)
+                    "[GoveeCustom] Restored cached " +
+                    (ctrl.name || ip) +
+                    " protocol=" +
+                    ctrl.protocol
                 );
             }
         } catch (e) {
-            // Ignore cache errors.
+            service.log(
+                "[GoveeCustom] Cache loading error"
+            );
         }
     };
 }
