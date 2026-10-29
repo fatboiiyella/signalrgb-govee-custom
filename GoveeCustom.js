@@ -147,7 +147,9 @@ const MIN_FRAME_MS = 25;
 // Device initialization
 // Corrected: no unsupported device.setLedNames methods.
 
-export function Initialize() {
+export function Initialize(dev.protocol = dev.sku === "H61C3"
+    ? PROTO_SOLID
+    : (controller.protocol || PROTO_DREAMVIEW);) {
     dev.ip = controller.ip;
     dev.sku = controller.sku;
    dev.protocol = dev.sku === "H61C3"
