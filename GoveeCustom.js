@@ -215,7 +215,7 @@ let dev = {
     lastArm: 0,
     lastDebug: 0,
     lastSolid: "",
-    lastSolidSentAt: 0,
+lastSolidSentAt: 0,
     firstRenderLogged: false,
     razerArmed: false,
     sentCount: 0
@@ -514,8 +514,14 @@ function sendSolid(color) {
     if (!color) return false;
 
     const key = color.join(",");
+    const now = Date.now();
 
-    if (key === dev.lastSolid) {
+    // Reinforce the desired color every 2 seconds,
+    // even when the SignalRGB color hasn't changed.
+    if (
+        key === dev.lastSolid &&
+        now - dev.lastSolidSentAt < 2000
+    ) {
         return true;
     }
 
@@ -535,6 +541,7 @@ function sendSolid(color) {
 
     if (ok) {
         dev.lastSolid = key;
+        dev.lastSolidSentAt = now;
     }
 
     return ok;
