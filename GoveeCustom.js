@@ -372,7 +372,7 @@ export function Render() {
     let sent = false;
 
     if (dev.protocol === PROTO_SOLID) {
-        sent = sendSolid(colors[0]);
+        sent = sendSolid(colors[Math.floor(colors.length / 2)]);
     } else {
         sent = sendStream(colors);
     }
