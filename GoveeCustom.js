@@ -510,19 +510,40 @@ function sendStream(colors) {
 // Solid color fallback
 // -----------------------------------------
 
+
 function sendSolid(color) {
     if (!color) return false;
 
-    const key = color.join(",");
     const now = Date.now();
 
-    // Reinforce the desired color every 2 seconds,
-    // even when the SignalRGB color hasn't changed.
-    if (
-        key === dev.lastSolid &&
-        now - dev.lastSolidSentAt < 2000
-    ) {
+    const previous = dev.lastSolid
+        ? dev.lastSolid.split(",").map(Number)
+        : null;
+
+    const COLOR_THRESHOLD = 8;
+    const MIN_SEND_INTERVAL_MS = 100;
+    const REFRESH_MS = 1000;
+
+    // Prevent commands from being sent too quickly.
+    if (now - dev.lastSolidSentAt < MIN_SEND_INTERVAL_MS) {
         return true;
+    }
+
+    // Ignore tiny changes, but periodically
+    // reinforce the current SignalRGB color.
+    if (previous) {
+        const difference = Math.max(
+            Math.abs(color[0] - previous[0]),
+            Math.abs(color[1] - previous[1]),
+            Math.abs(color[2] - previous[2])
+        );
+
+        if (
+            difference < COLOR_THRESHOLD &&
+            now - dev.lastSolidSentAt < REFRESH_MS
+        ) {
+            return true;
+        }
     }
 
     const ok = sendCmd({
@@ -540,12 +561,13 @@ function sendSolid(color) {
     });
 
     if (ok) {
-        dev.lastSolid = key;
+        dev.lastSolid = color.join(",");
         dev.lastSolidSentAt = now;
     }
 
     return ok;
 }
+
 
 // -----------------------------------------
 // Network sending
