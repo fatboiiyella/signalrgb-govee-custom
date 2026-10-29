@@ -241,8 +241,8 @@ export function Initialize() {
     // Explicitly restore DreamView on H61C3.
     // This ignores a cached Solid Color setting.
     if (dev.sku && dev.sku.indexOf("H61C3") === 0) {
-        dev.protocol = PROTO_SOLID;
-        dev.ledCount = H61C3_ZONES;
+    dev.protocol = PROTO_DREAMVIEW;
+    dev.ledCount = H61C3_ZONES;
     }
 
     dev.gradientOff = gradientOffFor(dev.sku);
@@ -449,51 +449,38 @@ function razerModeCommand(enable) {
 // RGBIC DreamView frames
 // -----------------------------------------
 
+
 function sendStream(colors) {
-    let collection = [
+    if (!colors || colors.length === 0) {
+        return false;
+    }
+
+    const count = Math.min(colors.length, 255);
+
+    const payload = [
         dev.gradientOff,
-        colors.length
+        count
     ];
 
-    for (const color of colors) {
-        collection.push(
-            color[0],
-            color[1],
-            color[2]
+    for (let i = 0; i < count; i++) {
+        const color = colors[i];
+
+        payload.push(
+            Math.max(0, Math.min(255, color[0] | 0)),
+            Math.max(0, Math.min(255, color[1] | 0)),
+            Math.max(0, Math.min(255, color[2] | 0))
         );
     }
 
-    let packet;
+    const length = payload.length;
 
-    if (dev.protocol === PROTO_RAZER) {
-    const dataLength = 2 + (colors.length * 3);
-
-    packet = [
+    const packet = [
         0xBB,
-        (dataLength >> 8) & 0xFF,
-        dataLength & 0xFF,
+        (length >> 8) & 0xFF,
+        length & 0xFF,
         0xB0,
-        0x01,
-        colors.length
+        ...payload
     ];
-
-        for (const color of colors) {
-            packet.push(
-                color[0],
-                color[1],
-                color[2]
-            );
-        }
-    } else {
-       const length = collection.length;
-
-        packet = [
-            0xBB,
-            (length >> 8) & 0xFF,
-            length & 0xFF,
-            0xB0
-        ].concat(collection);
-    }
 
     packet.push(xor(packet));
 
