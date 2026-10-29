@@ -150,7 +150,9 @@ const MIN_FRAME_MS = 25;
 export function Initialize() {
     dev.ip = controller.ip;
     dev.sku = controller.sku;
-    dev.protocol = controller.protocol || PROTO_DREAMVIEW;
+   dev.protocol = dev.sku === "H61C3"
+    ? PROTO_SOLID
+    : (controller.protocol || PROTO_DREAMVIEW);
     dev.ledCount = controller.ledCount || 10;
     dev.gradientOff = gradientOffFor(dev.sku);
 
