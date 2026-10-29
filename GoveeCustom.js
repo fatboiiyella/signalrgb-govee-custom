@@ -215,7 +215,7 @@ let dev = {
     lastArm: 0,
     lastDebug: 0,
     lastSolid: "",
-
+    lastSolidSentAt: 0,
     firstRenderLogged: false,
     razerArmed: false,
     sentCount: 0
