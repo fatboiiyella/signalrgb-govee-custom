@@ -26,7 +26,7 @@ const H61C3_ZONES = 15;
 const REARM_INTERVAL_MS = 120000;
 
 // 33 milliseconds = approximately 30 FPS.
-const MIN_FRAME_MS = 100;
+const MIN_FRAME_MS = 250;
 
 const GRADIENT_OFF_SKUS = [
     "H610A", "H6056", "H6047",
