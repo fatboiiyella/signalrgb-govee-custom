@@ -34,7 +34,7 @@ import { encode } from "@SignalRGB/base64";
  * every poll in addition to multicast. Example:
  *   const MANUAL_IPS = ["192.168.1.50", "192.168.1.51"];
  * -------------------------------------------------------------------------- */
-const MANUAL_IPS = [];
+const MANUAL_IPS = ["192.168.1.213"];
 
 /* Govee network ports (fixed by firmware) */
 const PORT_CMD    = 4003; // send color / turn / razer commands here
