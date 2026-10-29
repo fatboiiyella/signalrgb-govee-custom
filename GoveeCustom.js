@@ -23,7 +23,7 @@ const H61C3_ZONES = 15;
 
 // Increase this if streaming causes excessive
 // command interruptions.
-const REARM_INTERVAL_MS = 30000;
+const REARM_INTERVAL_MS = 120000;
 
 // 33 milliseconds = approximately 30 FPS.
 const MIN_FRAME_MS = 100;
