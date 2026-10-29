@@ -482,7 +482,7 @@ function sendStream(colors) {
             );
         }
     } else {
-       const length = collection.length + 1;
+       const length = collection.length;
 
         packet = [
             0xBB,
