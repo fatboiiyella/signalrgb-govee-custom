@@ -1,22 +1,72 @@
 
 import udp from "@SignalRGB/udp";
 
-export function Name() { return "Govee"; }
-export function Version() { return "1.0.3-H61C3"; }
-export function Type() { return "network"; }
-export function Publisher() { return "WhirlwindFX"; }
-export function Size() { return [22, 1]; }
-export function SubdeviceController() { return true; }
+// ==========================================
+// Govee H61C3 Custom - Version 1.1.0
+// SignalRGB LAN Plugin
+//
+// Static is the default for stability.
+// Dreamview streaming is experimental.
+// No automatic streaming re-arm.
+// No periodic status polling.
+// ==========================================
+
+const SKU = "H61C3";
+const LEDS = 42;
+
+const CMD_PORT = 4003;
+const SCAN_PORT = 4001;
+const LISTEN_PORT = 4002;
+
+const STREAM_MS = 50;
+const STATIC_MS = 120;
+const STATIC_REFRESH_MS = 2000;
+const STREAM_SETTLE_MS = 250;
+
+const PROFILE = {
+    name: "RGBIC LED Neon Rope Lights for Desks",
+    sku: SKU,
+    ledCount: LEDS,
+    supportDreamView: true,
+    supportRazer: true,
+    deviceImage:
+        "https://assets.signalrgb.com/devices/brands/govee/wifi/h61c2.png"
+};
+
+// ==========================================
+// Plugin information
+// ==========================================
+
+export function Name() {
+    return "Govee H61C3 Custom";
+}
+
+export function Version() {
+    return "1.1.0";
+}
+
+export function Type() {
+    return "network";
+}
+
+export function Publisher() {
+    return "Custom";
+}
+
+export function Size() {
+    return [42, 1];
+}
+
+export function SubdeviceController() {
+    return true;
+}
+
+// ==========================================
+// User controls
+// ==========================================
 
 export function ControllableParameters() {
     return [
-        {
-            property: "shutdownColor",
-            group: "lighting",
-            label: "Shutdown Color",
-            type: "color",
-            default: "#000000"
-        },
         {
             property: "LightingMode",
             group: "lighting",
@@ -30,14 +80,9 @@ export function ControllableParameters() {
             group: "lighting",
             label: "Forced Color",
             type: "color",
-            default: "#009bde"
-        },
-        {
-            property: "TurnOffOnShutdown",
-            group: "settings",
-            label: "Turn off on unlink",
-            type: "boolean",
-            default: false
+            min: "0",
+            max: "360",
+            default: "#ff0000"
         },
         {
             property: "protocolSelect",
@@ -45,155 +90,435 @@ export function ControllableParameters() {
             label: "Protocol",
             type: "combobox",
             values: [
-                "Auto",
+                "Static",
                 "Dreamview",
-                "RazerV1",
-                "RazerV2",
-                "Static"
+                "Auto"
             ],
-            default: "Auto"
+            default: "Static"
         },
         {
             property: "blendSegments",
             group: "settings",
-            label: "Blend Between Segments",
+            label: "Dreamview Blending",
             type: "combobox",
-            values: ["Auto", "On", "Off"],
-            default: "Auto"
+            values: ["Off", "On"],
+            default: "Off"
+        },
+        {
+            property: "shutdownColor",
+            group: "lighting",
+            label: "Shutdown Color",
+            type: "color",
+            min: "0",
+            max: "360",
+            default: "#000000"
+        },
+        {
+            property: "TurnOffOnShutdown",
+            group: "settings",
+            label: "Turn off on unlink",
+            type: "boolean",
+            default: false
         }
     ];
 }
 
-let govee;
-let UDPServer;
+// ==========================================
+// Runtime state
+// ==========================================
 
-let channels = [];
-let autoProtocol = "Static";
-let loggedFirstFrame = false;
-let renderCount = 0;
-let sawConnectedSocket = false;
-let loggedMissingProtocol = false;
-let blendByDefault = true;
-let activeOutputProtocol = null;
-let streamingReadyAt = 0;
+let socket;
+let connected = false;
+let activeMode = null;
+let readyAt = 0;
+let lastFrame = 0;
+let lastStatic = 0;
+let lastStaticColor = "";
+let firstFrameLogged = false;
+let channelReady = false;
 
-const UnknownSkuLedCount = 120;
+function log(message) {
+    device.log("[H61C3 v1.1.0] " + message);
+}
 
-export function Initialize() {
-    loggedFirstFrame = false;
-    renderCount = 0;
-    sawConnectedSocket = false;
-    activeOutputProtocol = null;
-    streamingReadyAt = 0;
-    loggedMissingProtocol = false;
-    govee = undefined;
+// ==========================================
+// Network commands
+// ==========================================
 
-    device.addFeature("base64");
-    device.setName(controller.sku);
-    device.setImageFromUrl(controller.deviceImage);
-
-    if (UDPServer !== undefined) {
-        UDPServer.stop();
-        UDPServer = undefined;
+function send(command) {
+    if (!socket || !connected) {
+        return false;
     }
 
-    UDPServer = new UdpSocketServer({
-        ip: controller.ip,
-        broadcastPort: 4003
+    try {
+        socket.send(
+            JSON.stringify({
+                msg: command
+            })
+        );
+        return true;
+    } catch (e) {
+        log("Send error: " + e.message);
+        return false;
+    }
+}
+
+function power(on) {
+    return send({
+        cmd: "turn",
+        data: {
+            value: on ? 1 : 0
+        }
     });
+}
 
-    UDPServer.start();
+function streaming(enable) {
+    return send({
+        cmd: "razer",
+        data: {
+            pt: enable
+                ? "uwABsQEK"
+                : "uwABsQAL"
+        }
+    });
+}
 
-    fetchDeviceInfoFromTableAndConfigure();
+// ==========================================
+// Color utilities
+// ==========================================
 
-    govee = new GoveeProtocol(
-        controller.ip,
-        controller.supportDreamView,
-        controller.supportRazer
+function clamp(value) {
+    return Math.max(
+        0,
+        Math.min(
+            255,
+            Math.round(Number(value) || 0)
+        )
     );
 }
 
-export function Render() {
-    if (govee === undefined) {
-        if (!loggedMissingProtocol) {
-            loggedMissingProtocol = true;
-            device.log(
-                "Render called before Govee initialized."
-            );
-        }
+function checksum(bytes) {
+    let result = 0;
+
+    for (const byte of bytes) {
+        result ^= byte;
+    }
+
+    return result & 255;
+}
+
+function getColors() {
+    const channel = device.channel("Channel 1");
+
+    if (LightingMode === "Forced") {
+        return device.createColorArray(
+            forcedColor,
+            LEDS,
+            "Inline"
+        );
+    }
+
+    if (channel.shouldPulseColors()) {
+        return device.createColorArray(
+            device.getChannelPulseColor(
+                "Channel 1"
+            ),
+            LEDS,
+            "Inline"
+        );
+    }
+
+    return channel.getColors("Inline");
+}
+
+function normalizeColors(raw) {
+    const output = [];
+
+    for (let i = 0; i < LEDS; i++) {
+        const index = i * 3;
+
+        output.push(
+            clamp(raw[index]),
+            clamp(raw[index + 1]),
+            clamp(raw[index + 2])
+        );
+    }
+
+    return output;
+}
+
+// ==========================================
+// Stable static output
+// ==========================================
+
+function sendStatic(colors, now) {
+    const center =
+        Math.floor(LEDS / 2) * 3;
+
+    const rgb = [
+        colors[center],
+        colors[center + 1],
+        colors[center + 2]
+    ];
+
+    const key = rgb.join(",");
+
+    if (
+        now - lastStatic < STATIC_MS
+    ) {
         return;
     }
 
     if (
-        UDPServer === undefined ||
-        !UDPServer.connected
+        key === lastStaticColor &&
+        now - lastStatic < STATIC_REFRESH_MS
     ) {
-        device.pause(10);
+        return;
+    }
+
+    const sent = send({
+        cmd: "colorwc",
+        data: {
+            color: {
+                r: rgb[0],
+                g: rgb[1],
+                b: rgb[2]
+            },
+            colorTemInKelvin: 0
+        }
+    });
+
+    if (sent) {
+        lastStatic = now;
+        lastStaticColor = key;
+    }
+}
+
+// ==========================================
+// Experimental Dreamview output
+// ==========================================
+
+function sendDreamview(colors) {
+    const mode =
+        blendSegments === "On" ? 1 : 0;
+
+    const payload = [
+        mode,
+        LEDS,
+        ...colors
+    ];
+
+    const packet = [
+        0xBB,
+        (payload.length >> 8) & 255,
+        payload.length & 255,
+        0xB0,
+        ...payload
+    ];
+
+    packet.push(checksum(packet));
+
+    send({
+        cmd: "razer",
+        data: {
+            pt: base64.Encode(packet)
+        }
+    });
+}
+
+function chooseMode() {
+    // Auto deliberately uses Static.
+    // Only explicit Dreamview enables streaming.
+    return protocolSelect === "Dreamview"
+        ? "Dreamview"
+        : "Static";
+}
+
+// ==========================================
+// Device initialization
+// ==========================================
+
+export function Initialize() {
+    if (socket) {
+        try {
+            socket.disconnect();
+        } catch (e) {
+            // Already disconnected.
+        }
+
+        try {
+            socket.close();
+        } catch (e) {
+            // Already closed.
+        }
+    }
+
+    socket = undefined;
+    connected = false;
+    activeMode = null;
+    readyAt = 0;
+    lastFrame = 0;
+    lastStatic = 0;
+    lastStaticColor = "";
+    firstFrameLogged = false;
+    channelReady = false;
+
+    device.addFeature("base64");
+
+    device.setName(
+        "Govee H61C3 - Stable / Dreamview"
+    );
+
+    device.setImageFromUrl(
+        PROFILE.deviceImage
+    );
+
+    device.addChannel(
+        "Channel 1",
+        LEDS
+    );
+
+    device.channel(
+        "Channel 1"
+    ).SetLedLimit(LEDS);
+
+    device.SetLedLimit(LEDS);
+
+    channelReady = true;
+
+    socket = udp.createSocket();
+
+    socket.on(
+        "error",
+        (code, message) => {
+            log(
+                "UDP error: " +
+                code + " " + message
+            );
+        }
+    );
+
+    socket.on("connection", () => {
+        connected = true;
+
+        // One power command on connection.
+        // Not repeated during rendering.
+        power(true);
+
+        log(
+            "Connected to " +
+            controller.ip +
+            ":" + CMD_PORT
+        );
+    });
+
+    socket.bind(0);
+
+    socket.connect(
+        controller.ip,
+        CMD_PORT
+    );
+
+    log(
+        "Initialized. 42 LEDs. " +
+        "Static default. Dreamview optional."
+    );
+}
+
+// ==========================================
+// Main render loop
+// ==========================================
+
+export function Render() {
+    if (!connected || !channelReady) {
+        device.pause(20);
         return;
     }
 
     const now = Date.now();
+    const mode = chooseMode();
 
-    if (!sawConnectedSocket) {
-        sawConnectedSocket = true;
-        govee.setDeviceState(true);
-        streamingReadyAt = now + 200;
-        device.pause(10);
-        return;
-    }
-
-    if (now < streamingReadyAt) {
-        device.pause(10);
-        return;
-    }
-
-    const selectedProtocol =
-        protocolSelect === "Auto"
-            ? autoProtocol
-            : protocolSelect;
-
-    if (
-        selectedProtocol !== activeOutputProtocol
-    ) {
-        if (selectedProtocol === "Static") {
-            govee.SetStreamingMode(false);
+    // Change protocol only when selected.
+    // No periodic streaming reset.
+    if (mode !== activeMode) {
+        if (mode === "Static") {
+            streaming(false);
         } else {
-            govee.SetStreamingMode(true);
+            streaming(true);
         }
 
-        activeOutputProtocol = selectedProtocol;
-        streamingReadyAt = now + 200;
+        activeMode = mode;
 
-        device.log(
-            `Govee output protocol: ${selectedProtocol}`
-        );
+        lastFrame = 0;
+        lastStatic = 0;
+        lastStaticColor = "";
 
+        readyAt =
+            now + STREAM_SETTLE_MS;
+
+        log("Protocol: " + mode);
+
+        device.pause(20);
+        return;
+    }
+
+    if (now < readyAt) {
+        device.pause(20);
+        return;
+    }
+
+    const interval =
+        mode === "Static"
+            ? STATIC_MS
+            : STREAM_MS;
+
+    if (
+        now - lastFrame < interval
+    ) {
         device.pause(10);
         return;
     }
 
-    renderCount++;
-    govee.SendRGB();
+    lastFrame = now;
+
+    const colors = normalizeColors(
+        getColors()
+    );
+
+    if (mode === "Static") {
+        sendStatic(colors, now);
+    } else {
+        sendDreamview(colors);
+    }
+
+    if (!firstFrameLogged) {
+        firstFrameLogged = true;
+
+        log(
+            "First frame sent: " + mode
+        );
+    }
 
     device.pause(
-        selectedProtocol === "Static" ? 10 : 40
+        mode === "Static" ? 30 : 20
     );
 }
 
+// ==========================================
+// Shutdown
+// ==========================================
+
 export function Shutdown(SystemSuspending) {
-    if (govee === undefined) {
+    if (!connected) {
         return;
     }
 
-    if (
-        activeOutputProtocol !== "Static" &&
-        activeOutputProtocol !== null
-    ) {
-        govee.SetStreamingMode(false);
+    if (activeMode === "Dreamview") {
+        streaming(false);
     }
 
     if (TurnOffOnShutdown) {
-        govee.setDeviceState(false);
+        power(false);
         return;
     }
 
@@ -202,117 +527,23 @@ export function Shutdown(SystemSuspending) {
             ? "#000000"
             : shutdownColor;
 
-    govee.SendStaticColor(
-        device.createColorArray(
-            color,
-            1,
-            "Inline"
-        )
-    );
-}
-
-function fetchDeviceInfoFromTableAndConfigure() {
-    if (
-        !GoveeDeviceLibrary.hasOwnProperty(
-            controller.sku
-        )
-    ) {
-        device.log(
-            `Unknown Govee SKU: ${controller.sku}`
-        );
-
-        autoProtocol = "Static";
-
-        ConfigureChannels([
-            {
-                name: "Channel 1",
-                ledCount: UnknownSkuLedCount
-            }
-        ]);
-
-        return;
-    }
-
-    const info =
-        GoveeDeviceLibrary[controller.sku];
-
-    blendByDefault =
-        info.blendSegments ?? true;
-
-    device.setName(
-        `Govee ${info.sku} - ${info.name}`
+    const rgb = device.createColorArray(
+        color,
+        1,
+        "Inline"
     );
 
-    autoProtocol = GetAutoProtocol(info);
-
-    device.log(
-        `Auto protocol: ${autoProtocol}`
-    );
-
-    ConfigureChannels(GetChannelLayout(info));
-}
-
-function GetAutoProtocol(info) {
-    if (info.supportDreamView) {
-        return "Dreamview";
-    }
-
-    if (info.supportRazer) {
-        return "RazerV1";
-    }
-
-    return "Static";
-}
-
-function ShouldBlend() {
-    if (blendSegments === "On") {
-        return true;
-    }
-
-    if (blendSegments === "Off") {
-        return false;
-    }
-
-    return blendByDefault;
-}
-
-function GetChannelLayout(info) {
-    if (info.usesSubDevices) {
-        return info.subdevices.map(
-            (subdevice, index) => ({
-                name: `Channel ${index + 1}`,
-                ledCount: subdevice.ledCount
-            })
-        );
-    }
-
-    return [
-        {
-            name: "Channel 1",
-            ledCount: info.ledCount
+    send({
+        cmd: "colorwc",
+        data: {
+            color: {
+                r: clamp(rgb[0]),
+                g: clamp(rgb[1]),
+                b: clamp(rgb[2])
+            },
+            colorTemInKelvin: 0
         }
-    ];
-}
-
-function ConfigureChannels(layout) {
-    channels = layout;
-
-    let totalLedCount = 0;
-
-    for (const channel of channels) {
-        device.addChannel(
-            channel.name,
-            channel.ledCount
-        );
-
-        device.channel(
-            channel.name
-        ).SetLedLimit(channel.ledCount);
-
-        totalLedCount += channel.ledCount;
-    }
-
-    device.SetLedLimit(totalLedCount);
+    });
 }
 
 // ==========================================
@@ -323,81 +554,33 @@ export function DiscoveryService() {
     this.IconUrl =
         "https://assets.signalrgb.com/brands/govee/logo.png";
 
-    this.firstRun = true;
+    this.UdpBroadcastPort = SCAN_PORT;
+    this.UdpListenPort = LISTEN_PORT;
 
-    this.Initialize = function () {
-        service.log(
-            "Searching for Govee network devices..."
-        );
-    };
-
-    this.UdpBroadcastPort = 4001;
-    this.UdpListenPort = 4002;
     this.UdpBroadcastAddress =
         "239.255.255.250";
 
+    this.PollInterval = 30000;
     this.lastPollTime = 0;
-    this.PollInterval = 60000;
+    this.firstRun = true;
 
-    this.cache = new IPCache();
-    this.activeSockets = new Map();
-    this.activeSocketTimer = Date.now();
+    this.cache = new DeviceCache();
 
-    this.LoadCachedDevices = function () {
-        for (const [key, value] of this.cache.Entries()) {
-            this.CreateControllerDevice(value);
-            this.checkCachedDevice(value.ip);
-
-            if (value.paired !== false) {
-                this.link(value);
-            }
-        }
-    };
-
-    this.checkCachedDevice = function (ipAddress) {
-        if (UDPServer !== undefined) {
-            UDPServer.stop();
-            UDPServer = undefined;
-        }
-
-        const socketServer = new UdpSocketServer({
-            ip: ipAddress,
-            isDiscoveryServer: true
-        });
-
-        this.activeSockets.set(
-            ipAddress,
-            socketServer
+    this.Initialize = function () {
+        service.log(
+            "[H61C3 Custom] Searching for H61C3"
         );
-
-        this.activeSocketTimer = Date.now();
-        socketServer.start();
-    };
-
-    this.clearSockets = function () {
-        if (
-            Date.now() - this.activeSocketTimer > 10000 &&
-            this.activeSockets.size > 0
-        ) {
-            for (
-                const [key, value]
-                of this.activeSockets.entries()
-            ) {
-                value.stop();
-                this.activeSockets.delete(key);
-            }
-        }
     };
 
     this.CheckForDevices = function () {
         if (
-            Date.now() - discovery.lastPollTime <
-            discovery.PollInterval
+            Date.now() - this.lastPollTime <
+            this.PollInterval
         ) {
             return;
         }
 
-        discovery.lastPollTime = Date.now();
+        this.lastPollTime = Date.now();
 
         service.broadcast(
             JSON.stringify({
@@ -412,720 +595,330 @@ export function DiscoveryService() {
     };
 
     this.Discovered = function (value) {
-        const response =
-            JSON.parse(value.response);
+        let packet;
 
-        if (response.msg.cmd !== "scan") {
+        try {
+            packet = JSON.parse(value.response);
+        } catch (e) {
             return;
         }
 
         if (
-            !response.msg.data.hasOwnProperty("ip")
+            !packet ||
+            !packet.msg ||
+            packet.msg.cmd !== "scan"
         ) {
             return;
         }
 
-        this.CreateControllerDevice(value);
-    };
+        const data = packet.msg.data;
 
-    this.forceDiscovery = function (value) {
-        this.Discovered(value);
-    };
+        // Ignore our own scan request packets.
+        if (
+            !data ||
+            !data.ip ||
+            data.sku !== SKU ||
+            !data.device
+        ) {
+            return;
+        }
 
-    this.purgeIPCache = function () {
-        this.cache.PurgeCache();
+        const id =
+            value.id || data.device;
+
+        const old =
+            service.getController(id);
+
+        if (old) {
+            old.updateWithValue({
+                id,
+                ...data
+            });
+        } else {
+            const deviceController =
+                new H61C3Controller({
+                    id,
+                    ...data
+                });
+
+            service.addController(
+                deviceController
+            );
+
+            service.announceController(
+                deviceController
+            );
+        }
     };
 
     this.Update = function () {
         if (this.firstRun) {
-            this.LoadCachedDevices();
             this.firstRun = false;
+
+            for (
+                const [id, entry]
+                of this.cache.Entries()
+            ) {
+                if (
+                    entry.sku !== SKU ||
+                    entry.paired === false
+                ) {
+                    continue;
+                }
+
+                if (!service.getController(id)) {
+                    const saved =
+                        new H61C3Controller(
+                            entry
+                        );
+
+                    service.addController(saved);
+                    service.announceController(saved);
+                }
+            }
         }
 
-        for (const cont of service.controllers) {
-            cont.obj.update();
+        for (
+            const entry of service.controllers
+        ) {
+            if (
+                entry.obj &&
+                typeof entry.obj.update === "function"
+            ) {
+                entry.obj.update();
+            }
         }
 
-        this.clearSockets();
         this.CheckForDevices();
     };
 
-    this.getSocket = function (key) {
-        return this.activeSockets.get(key);
+    this.link = function (value) {
+        const ctrl =
+            service.getController(value.id);
+
+        if (!ctrl) {
+            return;
+        }
+
+        ctrl.paired = true;
+
+        service.announceController(ctrl);
+
+        this.cache.Add(
+            ctrl.id,
+            ctrl.toCache()
+        );
+    };
+
+    this.unlink = function (value) {
+        const ctrl =
+            service.getController(value.id);
+
+        if (!ctrl) {
+            return;
+        }
+
+        ctrl.paired = false;
+
+        this.cache.Add(
+            ctrl.id,
+            ctrl.toCache()
+        );
+
+        service.suppressController(ctrl);
+    };
+
+    this.remove = function (value = false) {
+        if (value) {
+            const ctrl =
+                service.getController(value.id);
+
+            if (ctrl) {
+                service.suppressController(ctrl);
+                service.removeController(ctrl);
+            }
+
+            this.cache.Remove(value.id);
+        } else {
+            for (
+                const [id, entry]
+                of this.cache.Entries()
+            ) {
+                const ctrl =
+                    service.getController(id);
+
+                if (ctrl) {
+                    service.suppressController(ctrl);
+                    service.removeController(ctrl);
+                }
+            }
+
+            this.cache.Clear();
+        }
     };
 
     this.Shutdown = function () {};
-
-    this.remove = function (controllerObj = false) {
-        if (controllerObj) {
-            const udpSocket =
-                this.getSocket(controllerObj.ip);
-
-            if (udpSocket) {
-                udpSocket.stop();
-                this.activeSockets.delete(
-                    controllerObj.ip
-                );
-            }
-
-            this.cache.Remove(controllerObj.id);
-
-            service.suppressController(
-                controllerObj
-            );
-
-            service.removeController(
-                controllerObj
-            );
-        } else {
-            this.cache.PurgeCache();
-
-            for (
-                const [key, value]
-                of this.cache.Entries()
-            ) {
-                service.suppressController(value);
-                service.removeController(value);
-            }
-        }
-    };
-
-    this.CreateControllerDevice = function (value) {
-        const controller =
-            service.getController(value.id);
-
-        if (controller === undefined) {
-            service.addController(
-                new GoveeController(value)
-            );
-        } else {
-            controller.updateWithValue(value);
-        }
-    };
-
-    this.link = function (controllerObj) {
-        const controller =
-            service.getController(controllerObj.id);
-
-        if (controller === undefined) {
-            return;
-        }
-
-        controller.paired = true;
-        controller.updateWithValue(controller);
-        service.announceController(controller);
-
-        this.cacheControllerInfo(controller);
-    };
-
-    this.unlink = function (controllerObj) {
-        const controller =
-            service.getController(controllerObj.id);
-
-        if (controller === undefined) {
-            return;
-        }
-
-        const udpSocket =
-            this.getSocket(controllerObj.ip);
-
-        if (udpSocket) {
-            udpSocket.stop();
-            this.activeSockets.delete(
-                controllerObj.ip
-            );
-        }
-
-        controller.paired = false;
-        controller.updateWithValue(controller);
-        service.suppressController(controller);
-
-        this.cacheControllerInfo(controller);
-    };
-
-    this.cacheControllerInfo = function (value) {
-        discovery.cache.Add(value.id, {
-            id: value.id,
-            paired: value.paired,
-            ip: value.ip,
-            name: value.sku,
-            GoveeInfo: value.GoveeInfo,
-            supportDreamView:
-                value.GoveeInfo.supportDreamView,
-            supportRazer:
-                value.GoveeInfo.supportRazer,
-            deviceImage:
-                value.GoveeInfo.deviceImage,
-            device: value.device,
-            sku: value.sku,
-            initialized: value.initialized
-        });
-    };
 }
 
 // ==========================================
-// Device controller
+// H61C3 controller
 // ==========================================
 
-class GoveeController {
-    constructor(value) {
-        this.id = value?.id ?? "Unknown ID";
+class H61C3Controller {
+    constructor(data) {
+        this.id =
+            data.id || data.device;
 
-        this.paired =
-            value?.paired ??
-            discovery.cache.Get(this.id)?.paired ??
-            false;
+        this.ip = data.ip;
+        this.sku = SKU;
+        this.name = SKU;
 
-        let response;
+        this.device =
+            data.device || this.id;
 
-        if (value.response) {
-            response =
-                JSON.parse(value.response).msg.data;
-        } else {
-            response = value;
-        }
+        this.GoveeInfo = PROFILE;
 
-        this.ip =
-            response?.ip ?? "Unknown IP";
-
-        this.name =
-            response?.sku ?? "Unknown SKU";
-
-        this.GoveeInfo =
-            this.GetGoveeDevice(response.sku);
-
-        this.supportDreamView =
-            this.GoveeInfo.supportDreamView;
-
-        this.supportRazer =
-            this.GoveeInfo.supportRazer;
+        this.supportDreamView = true;
+        this.supportRazer = true;
 
         this.deviceImage =
-            this.GoveeInfo.deviceImage;
+            PROFILE.deviceImage;
 
-        this.device = response.device;
-        this.sku = response.sku;
-        this.initialized = false;
-
-        if (this.name !== "Unknown SKU") {
-            this.cacheControllerInfo(this);
-        }
-    }
-
-    GetGoveeDevice(sku) {
-        if (
-            GoveeDeviceLibrary.hasOwnProperty(sku)
-        ) {
-            return GoveeDeviceLibrary[sku];
-        }
-
-        return {
-            name: "Unknown",
-            supportDreamView: false,
-            supportRazer: false,
-            deviceImage:
-                "https://assets.signalrgb.com/brands/products/govee_ble/icon@2x.png"
-        };
-    }
-
-    updateWithValue(value) {
-        this.id = value.id;
         this.paired =
-            value.paired ?? this.paired;
+            data.paired !== false;
 
-        let response;
+        this.initialized = false;
+    }
 
-        if (value.response) {
-            response =
-                JSON.parse(value.response).msg.data;
-        } else {
-            response = value;
+    updateWithValue(data) {
+        if (data.ip) {
+            this.ip = data.ip;
         }
 
-        this.ip =
-            response?.ip ?? this.ip;
-
-        this.device = response.device;
-        this.sku = response.sku;
+        if (data.device) {
+            this.device = data.device;
+        }
 
         service.updateController(this);
+
+        discovery.cache.Add(
+            this.id,
+            this.toCache()
+        );
     }
 
     update() {
         if (!this.initialized) {
             this.initialized = true;
+
             service.updateController(this);
-            service.announceController(this);
-        }
-    }
 
-    cacheControllerInfo(value) {
-        discovery.cache.Add(value.id, {
-            id: value.id,
-            paired: value.paired,
-            ip: value.ip,
-            name: value.sku,
-            GoveeInfo: value.GoveeInfo,
-            supportDreamView:
-                value.GoveeInfo.supportDreamView,
-            supportRazer:
-                value.GoveeInfo.supportRazer,
-            deviceImage:
-                value.GoveeInfo.deviceImage,
-            device: value.device,
-            sku: value.sku,
-            initialized: value.initialized
-        });
-    }
-}
-
-// ==========================================
-// Lighting protocol
-// ==========================================
-
-class GoveeProtocol {
-    constructor(ip, supportDreamView, supportRazer) {
-        this.ip = ip;
-        this.port = 4003;
-        this.supportDreamView = supportDreamView;
-        this.supportRazer = supportRazer;
-    }
-
-    setDeviceState(on) {
-        UDPServer.send(
-            JSON.stringify({
-                msg: {
-                    cmd: "turn",
-                    data: {
-                        value: on ? 1 : 0
-                    }
-                }
-            })
-        );
-    }
-
-    SetStreamingMode(enable) {
-        UDPServer.send(
-            JSON.stringify({
-                msg: {
-                    cmd: "razer",
-                    data: {
-                        pt: enable
-                            ? "uwABsQEK"
-                            : "uwABsQAL"
-                    }
-                }
-            })
-        );
-    }
-
-    calculateXorChecksum(packet) {
-        let checksum = 0;
-
-        for (const byte of packet) {
-            checksum ^= byte;
-        }
-
-        return checksum;
-    }
-
-    createDreamViewPacket(colors, mode = 0x00) {
-        const payload = [
-            mode & 0xff,
-            colors.length / 3
-        ].concat(colors);
-
-        const header = [
-            0xBB,
-            (payload.length >> 8) & 0xff,
-            payload.length & 0xff,
-            0xB0
-        ];
-
-        const packet = header.concat(payload);
-
-        packet.push(
-            this.calculateXorChecksum(packet)
-        );
-
-        return packet;
-    }
-
-    createRazerPacketV1(colors) {
-        const packet = [
-            0xBB,
-            0x00,
-            0x0E,
-            0xB0,
-            0x01,
-            colors.length / 3
-        ].concat(colors);
-
-        packet.push(0);
-        return packet;
-    }
-
-    createRazerPacketV2(colors) {
-        const packet = [
-            0xBB,
-            0x00,
-            0x0E,
-            0xB0,
-            0x01,
-            colors.length
-        ].concat(colors);
-
-        packet.push(
-            this.calculateXorChecksum(packet)
-        );
-
-        return packet;
-    }
-
-    SendStaticColor(rgb) {
-        UDPServer.send(
-            JSON.stringify({
-                msg: {
-                    cmd: "colorwc",
-                    data: {
-                        color: {
-                            r: rgb[0],
-                            g: rgb[1],
-                            b: rgb[2]
-                        },
-                        colorTemInKelvin: 0
-                    }
-                }
-            })
-        );
-    }
-
-    SetStaticColor(rgb) {
-        this.SendStaticColor(rgb);
-        device.pause(100);
-    }
-
-    SendEncodedPacket(packet) {
-        const command = base64.Encode(packet);
-
-        if (!loggedFirstFrame) {
-            loggedFirstFrame = true;
-            device.log(
-                `Streaming started: ${packet.length} bytes`
-            );
-        }
-
-        UDPServer.send(
-            JSON.stringify({
-                msg: {
-                    cmd: "razer",
-                    data: {
-                        pt: command
-                    }
-                }
-            })
-        );
-    }
-
-    GetChannelRGB(channelName, overrideColor) {
-        const channel =
-            device.channel(channelName);
-
-        const count = channel.LedCount();
-
-        if (overrideColor) {
-            return device.createColorArray(
-                overrideColor,
-                count,
-                "Inline"
-            );
-        }
-
-        if (LightingMode === "Forced") {
-            return device.createColorArray(
-                forcedColor,
-                count,
-                "Inline"
-            );
-        }
-
-        if (channel.shouldPulseColors()) {
-            return device.createColorArray(
-                device.getChannelPulseColor(channelName),
-                channel.LedLimit(),
-                "Inline"
-            );
-        }
-
-        return channel.getColors("Inline");
-    }
-
-    SendRGB(overrideColor) {
-        let RGBData = [];
-
-        for (const channel of channels) {
-            RGBData = RGBData.concat(
-                this.GetChannelRGB(
-                    channel.name,
-                    overrideColor
-                )
-            );
-        }
-
-        const selected =
-            protocolSelect === "Auto"
-                ? autoProtocol
-                : protocolSelect;
-
-        let packet;
-
-        switch (selected) {
-            case "Dreamview":
-                packet = this.createDreamViewPacket(
-                    RGBData,
-                    ShouldBlend() ? 0x01 : 0x00
-                );
-                this.SendEncodedPacket(packet);
-                break;
-
-            case "RazerV1":
-                packet = this.createRazerPacketV1(
-                    RGBData
-                );
-                this.SendEncodedPacket(packet);
-                break;
-
-            case "RazerV2":
-                packet = this.createRazerPacketV2(
-                    RGBData
-                );
-                this.SendEncodedPacket(packet);
-                break;
-
-            case "Static":
-                this.SetStaticColor(
-                    RGBData.slice(0, 3)
-                );
-                break;
-
-            default:
-                this.SetStaticColor(
-                    RGBData.slice(0, 3)
-                );
-                break;
-        }
-    }
-}
-
-// ==========================================
-// UDP transport
-// ==========================================
-
-class UdpSocketServer {
-    constructor(args) {
-        this.server = null;
-
-        this.listenPort =
-            args?.listenPort ?? 0;
-
-        this.broadcastPort =
-            args?.broadcastPort ?? 4001;
-
-        this.ipToConnectTo =
-            args?.ip ?? "239.255.255.250";
-
-        this.isDiscoveryServer =
-            args?.isDiscoveryServer ?? false;
-
-        this.connected = false;
-
-        this.log = (msg) => {
-            if (this.isDiscoveryServer) {
-                service.log(msg);
-            } else {
-                device.log(msg);
+            if (this.paired) {
+                service.announceController(this);
             }
+
+            discovery.cache.Add(
+                this.id,
+                this.toCache()
+            );
+        }
+    }
+
+    toCache() {
+        return {
+            id: this.id,
+            ip: this.ip,
+            sku: this.sku,
+            device: this.device,
+            paired: this.paired,
+            deviceImage: this.deviceImage,
+            supportDreamView: true,
+            supportRazer: true
         };
     }
-
-    send(packet) {
-        if (!this.server) {
-            this.server = udp.createSocket();
-        }
-
-        this.server.send(packet);
-    }
-
-    start() {
-        this.server = udp.createSocket();
-
-        this.server.on(
-            "error",
-            this.onError.bind(this)
-        );
-
-        this.server.on(
-            "message",
-            this.onMessage.bind(this)
-        );
-
-        this.server.on(
-            "listening",
-            this.onListening.bind(this)
-        );
-
-        this.server.on(
-            "connection",
-            this.onConnection.bind(this)
-        );
-
-        this.server.bind(this.listenPort);
-
-        this.server.connect(
-            this.ipToConnectTo,
-            this.broadcastPort
-        );
-    }
-
-    stop() {
-        this.connected = false;
-
-        if (this.server) {
-            this.server.disconnect();
-            this.server.close();
-        }
-    }
-
-    onConnection() {
-        this.connected = true;
-
-        if (this.isDiscoveryServer) {
-            this.server.send(
-                JSON.stringify({
-                    msg: {
-                        cmd: "scan",
-                        data: {
-                            account_topic: "reserve"
-                        }
-                    }
-                })
-            );
-        }
-    }
-
-    onListening() {
-        const address = this.server.address();
-
-        this.log(
-            `Socket listening: ${address.port}`
-        );
-    }
-
-    onMessage(msg) {
-        if (this.isDiscoveryServer) {
-            discovery.forceDiscovery(msg);
-            this.server.close();
-        }
-    }
-
-    onError(code, message) {
-        this.log(
-            `UDP error: ${code} - ${message}`
-        );
-
-        this.server.close();
-    }
 }
 
 // ==========================================
-// Device cache
+// Persistent device cache
 // ==========================================
 
-class IPCache {
+class DeviceCache {
     constructor() {
-        this.cacheMap = new Map();
-        this.persistanceId = "ipCache";
-        this.persistanceKey = "cache";
+        this.map = new Map();
 
-        this.PopulateCacheFromStorage();
-    }
+        try {
+            const stored =
+                service.getSetting(
+                    "goveeH61C3",
+                    "devices"
+                );
 
-    Add(key, value) {
-        this.cacheMap.set(key, value);
-        this.Persist();
-    }
+            if (stored) {
+                this.map = new Map(
+                    JSON.parse(stored)
+                );
+            }
 
-    Remove(key) {
-        this.cacheMap.delete(key);
-        this.Persist();
-    }
+            // Import cached devices from
+            // previous stock Govee addon.
+            const prior =
+                service.getSetting(
+                    "ipCache",
+                    "cache"
+                );
 
-    Has(key) {
-        return this.cacheMap.has(key);
-    }
+            if (prior) {
+                const entries =
+                    JSON.parse(prior);
 
-    Get(key) {
-        return this.cacheMap.get(key);
+                for (
+                    const [id, value]
+                    of entries
+                ) {
+                    if (
+                        value &&
+                        value.sku === SKU &&
+                        value.ip &&
+                        !this.map.has(id)
+                    ) {
+                        this.map.set(id, {
+                            ...value,
+                            id
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            this.map = new Map();
+        }
     }
 
     Entries() {
-        return this.cacheMap.entries();
-    }
-
-    PurgeCache() {
-        service.removeSetting(
-            this.persistanceId,
-            this.persistanceKey
-        );
-
-        this.cacheMap.clear();
-    }
-
-    PopulateCacheFromStorage() {
-        const storage = service.getSetting(
-            this.persistanceId,
-            this.persistanceKey
-        );
-
-        if (!storage) {
-            return;
-        }
-
-        try {
-            this.cacheMap = new Map(
-                JSON.parse(storage)
-            );
-        } catch (e) {
-            service.log(
-                "Invalid cached device list."
-            );
-        }
+        return this.map.entries();
     }
 
     Persist() {
         service.saveSetting(
-            this.persistanceId,
-            this.persistanceKey,
+            "goveeH61C3",
+            "devices",
             JSON.stringify(
-                Array.from(this.cacheMap.entries())
+                [...this.map.entries()]
             )
         );
     }
-}
 
-// ==========================================
-// H61C3 device profile
-// ==========================================
-
-const GoveeDeviceLibrary = {
-    H61C3: {
-        name: "RGBIC LED Neon Rope Lights for Desks",
-        deviceImage:
-            "https://assets.signalrgb.com/devices/brands/govee/wifi/h61c2.png",
-        sku: "H61C3",
-        state: 1,
-        supportRazer: true,
-        supportDreamView: true,
-        ledCount: 42
+    Add(id, item) {
+        this.map.set(id, item);
+        this.Persist();
     }
-};
+
+    Remove(id) {
+        this.map.delete(id);
+        this.Persist();
+    }
+
+    Clear() {
+        this.map.clear();
+        this.Persist();
+    }
+}
