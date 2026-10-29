@@ -137,7 +137,7 @@ let dev = {
 
 const MIN_FRAME_MS = 25; // ~40 fps cap (Govee streaming ceiling)
 
-export function Initialize() {
+export function Initialize(buildLayout(dev.ledCount);) {
     // Pull config from the announced controller (plain data only).
     dev.ip          = controller.ip;
     dev.sku         = controller.sku;
