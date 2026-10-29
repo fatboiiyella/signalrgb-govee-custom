@@ -98,35 +98,61 @@ export function Initialize(){
 	govee.SetStreamingMode(true);
 }
 
-export function Render(){
-	// Initialize assigns govee only after fetchDeviceInfoFromTableAndConfigure has run, so if that
-	// throws -- or Render is reached before Initialize at all -- govee is undefined and every call
-	// below fails with "Cannot read property of undefined". Bail instead of throwing once per frame.
-	if(govee === undefined){
-		if(!loggedMissingProtocol){
-			loggedMissingProtocol = true;
-			device.log("Render called before the device finished initializing. Nothing to send yet.");
-		}
 
-		return;
-	}
+export function Render() {
+    if (govee === undefined) {
+        if (!loggedMissingProtocol) {
+            loggedMissingProtocol = true;
+            device.log("Render called before Govee initialized.");
+        }
+        return;
+    }
 
-	// Uncomment to trace the render loop. Distinguishes a loop that never starts from one
-	// that starts and later stops -- neither is otherwise visible, since a device holds its
-	// last color rather than going dark.
-	// if(renderCount % 300 === 0){
-	// 	device.log(`Render tick ${renderCount}.`);
-	// }
+    if (UDPServer === undefined || !UDPServer.connected) {
+        device.pause(10);
+        return;
+    }
 
-	// Initialize starts the socket and then sends the setup commands straight away, before
-	// connect() has reported back, so they can go out on a socket that is not ready yet.
-	// Watch for the connection landing instead and assert them then. A flag check per frame,
-	// no blocking, and it works no matter how long the socket takes.
-	if(!sawConnectedSocket && UDPServer !== undefined && UDPServer.connected){
-		sawConnectedSocket = true;
-		govee.setDeviceState(true);
-		govee.SetStreamingMode(true);
-	}
+    if (!sawConnectedSocket) {
+        sawConnectedSocket = true;
+        govee.setDeviceState(true);
+    }
+
+    const selectedProtocol =
+        protocolSelect === "Auto"
+            ? autoProtocol
+            : protocolSelect;
+
+    const now = Date.now();
+
+    if (selectedProtocol !== activeOutputProtocol) {
+        if (selectedProtocol === "Static") {
+            if (activeOutputProtocol !== "Static") {
+                govee.SetStreamingMode(false);
+            }
+            streamingReadyAt = now + 150;
+        } else {
+            govee.SetStreamingMode(true);
+            streamingReadyAt = now + 150;
+        }
+
+        activeOutputProtocol = selectedProtocol;
+
+        device.log(
+            `Govee output protocol: ${selectedProtocol}`
+        );
+    }
+
+    if (now < streamingReadyAt) {
+        device.pause(10);
+        return;
+    }
+
+    renderCount++;
+    govee.SendRGB();
+    device.pause(10);
+}
+
 
 	// Stream mode is handed to us by one unacknowledged datagram, so a lost packet leaves the device
 	// ignoring every frame while looking fine from here. Assert it on the opening frames to cover
@@ -768,38 +794,25 @@ class GoveeProtocol {
 		device.pause(100);
 	}
 
-	SendEncodedPacket(packet){
-		const command = base64.Encode(packet);
+	SendEncodedPacket(packet) {
+    const command = base64.Encode(packet);
 
-		if(!loggedFirstFrame){
-			loggedFirstFrame = true;
-			device.log(`Streaming started: ${packet.length} byte frame over ${channels.length} channel(s).`);
-		}
+    if (!loggedFirstFrame) {
+        loggedFirstFrame = true;
+        device.log(
+            `Streaming started: ${packet.length} byte frame over ${channels.length} channel(s).`
+        );
+    }
 
-		// Debug
-		//device.log(`[${protocolSelect}] segments=${(packet.length - 7)/3 | 0} raw packet bytes=${packet.length}`);
-
-		const now = Date.now();
-
-		if (now - this.lastPacket > 1000) {
-			UDPServer.send(JSON.stringify({
-				msg: {
-					cmd: "status",
-					data: {}
-				}
-			}));
-			this.lastPacket = now;
-		}
-
-		UDPServer.send(JSON.stringify({
-			msg: {
-				cmd: "razer",
-				data: {
-					pt: command,
-				},
-			},
-		}));
-	}
+    UDPServer.send(JSON.stringify({
+        msg: {
+            cmd: "razer",
+            data: {
+                pt: command
+            }
+        }
+    }));
+}
 
 	GetChannelRGB(channelName, overrideColor){
 		const componentChannel = device.channel(channelName);
