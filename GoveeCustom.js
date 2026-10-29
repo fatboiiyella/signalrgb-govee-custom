@@ -26,7 +26,7 @@ const H61C3_ZONES = 15;
 const REARM_INTERVAL_MS = 120000;
 
 // 33 milliseconds = approximately 30 FPS.
-const MIN_FRAME_MS = 10;
+const MIN_FRAME_MS = 33;
 
 const GRADIENT_OFF_SKUS = [
     "H610A", "H6056", "H6047",
@@ -521,7 +521,7 @@ function sendSolid(color) {
         : null;
 
     const COLOR_THRESHOLD = 8;
-    const MIN_SEND_INTERVAL_MS = 100;
+    const MIN_SEND_INTERVAL_MS = 50;
     const REFRESH_MS = 1000;
 
     // Prevent commands from being sent too quickly.
