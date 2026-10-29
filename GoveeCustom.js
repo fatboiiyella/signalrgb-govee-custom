@@ -344,11 +344,12 @@ export function Render() {
 
     // Re-enter streaming mode periodically,
     // not on every frame.
-    if (
-        now - dev.lastArm > REARM_INTERVAL_MS
-    ) {
-        armDevice(now);
-    }
+   if (
+    dev.protocol !== PROTO_SOLID &&
+    now - dev.lastArm > REARM_INTERVAL_MS
+) {
+    armDevice(now);
+}
 
     const colors = [];
 
