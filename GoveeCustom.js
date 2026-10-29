@@ -164,16 +164,21 @@ export function ControllableParameters() {
                 "Streaming (experimental)",
                 "Solid (stable)"
             ],
-            default: "Streaming (experimental)"
+            default: "Solid (stable)"
         },
-        {
-            property: "gradientMode",
-            group: "settings",
-            label: "Streaming Gradient",
-            type: "combobox",
-            values: ["Gradient", "Discrete"],
-            default: "Gradient"
-        },
+       
+{
+    property: "protocolMode",
+    group: "settings",
+    label: "Protocol",
+    type: "combobox",
+    values: [
+        "Streaming (experimental)",
+        "Solid (stable)"
+    ],
+    default: "Solid (stable)"
+},
+
         {
             property: "onShutdown",
             group: "settings",
@@ -308,10 +313,10 @@ export function Render() {
 
     const now = Date.now();
 
-    const mode =
-        protocolMode === PROTOCOL_SOLID
-            ? PROTOCOL_SOLID
-            : PROTOCOL_STREAM;
+   const mode =
+    protocolMode === PROTOCOL_STREAM
+        ? PROTOCOL_STREAM
+        : PROTOCOL_SOLID;
 
     // Switch protocol only when requested.
     if (mode !== dev.activeProtocol) {
@@ -398,33 +403,26 @@ export function Render() {
 // Protocol switching
 // ==========================================
 
-function switchProtocol(mode, now) {
-    const previous = dev.activeProtocol;
 
+function switchProtocol(mode, now) {
     dev.activeProtocol = mode;
     dev.lastFrame = 0;
     dev.lastSolid = "";
     dev.lastSolidSent = 0;
 
     if (mode === PROTOCOL_STREAM) {
-
         enableStreaming();
-
         dev.lastKeepalive = now;
-
     } else {
-
-        // Exit streaming only if the plugin
-        // was previously using it.
-        if (previous === PROTOCOL_STREAM) {
-            disableStreaming();
-        }
+        // Explicitly exit streaming mode.
+        disableStreaming();
     }
 
     device.log(
         "[GoveeCustom] Protocol: " + mode
     );
 }
+
 
 // ==========================================
 // Streaming mode commands
