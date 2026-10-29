@@ -465,14 +465,16 @@ function sendStream(colors) {
     let packet;
 
     if (dev.protocol === PROTO_RAZER) {
-        packet = [
-            0xBB,
-            0x00,
-            0x0E,
-            0xB0,
-            0x01,
-            colors.length
-        ];
+    const dataLength = 2 + (colors.length * 3);
+
+    packet = [
+        0xBB,
+        (dataLength >> 8) & 0xFF,
+        dataLength & 0xFF,
+        0xB0,
+        0x01,
+        colors.length
+    ];
 
         for (const color of colors) {
             packet.push(
