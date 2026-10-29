@@ -241,7 +241,7 @@ export function Initialize() {
     // Explicitly restore DreamView on H61C3.
     // This ignores a cached Solid Color setting.
     if (dev.sku && dev.sku.indexOf("H61C3") === 0) {
-        dev.protocol = PROTO_RAZER;
+        dev.protocol = PROTO_SOLID;
         dev.ledCount = H61C3_ZONES;
     }
 
